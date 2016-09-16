@@ -9,6 +9,10 @@ class QueryParser
   def initialize
     @buffer = ""
     @parsed = []
+    reset!
+  end
+
+  def reset!
     @query = SlowQuery.new
   end
 
@@ -18,6 +22,9 @@ class QueryParser
       @parsed << @query
       @query = SlowQuery.new
     end
+  rescue => e
+    Syslog.err(e.message)
+    reset!
   end
 
   def pop_finished_query
@@ -104,10 +111,10 @@ class SlowQuery
     when PATTERNS[:query]
       append_line(line)
     else
-      if attributes[:query_string]
+      if !attributes[:query_string].empty?
         append_line(line)
       else
-        Syslog.err("Unparseable slow query log line:\n#{line}\n")
+        raise ArgumentError.new("Unparseable slow query log line: #{line}")
       end
     end
   end
