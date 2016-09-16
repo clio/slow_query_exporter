@@ -1,8 +1,9 @@
 #!/usr/bin/env ruby
 
-require 'gelf'
 require 'digest/crc64'
+require 'gelf'
 require 'optparse'
+require 'syslog'
 
 class QueryParser
   def initialize
@@ -106,7 +107,7 @@ class SlowQuery
       if attributes[:query_string]
         append_line(line)
       else
-        raise "Weird-looking log line:\n#{line}\n"
+        Syslog.err("Unparseable slow query log line:\n#{line}\n")
       end
     end
   end
@@ -204,6 +205,8 @@ OptionParser.new do |opts|
     exit
   end
 end.parse!
+
+Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
 
 logfile = ARGV[0]
 if ARGV.empty?
