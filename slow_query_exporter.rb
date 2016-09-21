@@ -215,11 +215,14 @@ end.parse!
 
 Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
 
-logfile = ARGV[0]
 if ARGV.empty?
   $stderr.puts(HELP_TEXT)
   exit 1
 end
+
+# We touch the logfile to make sure it exists before we start. Otherwise, "tail -F" will die.
+logfile = ARGV[0]
+File.open(logfile, "a") {}
 
 gelf = GELF::Notifier.new($graylog_host, $graylog_port, "WAN")
 parser = QueryParser.new
