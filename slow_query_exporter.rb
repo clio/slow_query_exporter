@@ -41,7 +41,7 @@ class SlowQuery
   }
   PATTERNS = {
     header:   /(^Tcp port:|^Time\s+Id|started with:$)/,
-    skip:     /^(# Time: \d+|use \w+;)/,
+    skip:     /^(# Time: \d+|# Profile_|use \w+;)/,
     userhost: /^# User@Host: (\S+)\[\S+\] @\s+\[(\S+)\]/,
     thread:   /^# Thread_id: (\d+)\s+Schema: (\w+)\s+Last_errno: (\d+)\s+Killed: (\d+)/,
     qtime:    /^# Query_time: (\S+)\s+Lock_time: (\S+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)\s+Rows_affected: (\d+)\s+Rows_read: (\d+)/,
