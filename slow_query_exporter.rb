@@ -1,9 +1,13 @@
 #!/usr/bin/env ruby
 
+require 'daemons'
 require 'digest/crc64'
 require 'gelf'
 require 'optparse'
 require 'syslog'
+
+RUN_DIRECTORY = "/var/run/slow_query_exporter"
+PROGRESS_FILE = "#{RUN_DIRECTORY}/last_timestamp"
 
 class QueryParser
   def initialize
@@ -123,6 +127,10 @@ class SlowQuery
     @done
   end
 
+  def timestamp
+    attributes[:timestamp]
+  end
+
   def append_line(line)
     line = compress(line)
     line = " " << line if !attributes[:query_string].empty?
@@ -132,7 +140,7 @@ class SlowQuery
 
   def gelf_attributes
     fingerprint = Digest::CRC64.hexdigest(normalized_query).upcase
-    attrs = {
+    gelf_attrs = {
       "version" => "1.1",
       "short_message" => sprintf("Slow query %s on %s: %.2f seconds", fingerprint, attributes[:host], attributes[:request_time]),
       "_type" => "mysql-slow",
@@ -140,9 +148,9 @@ class SlowQuery
     }
     attributes.each do |key, val|
       prefix = SPECIAL_PREFIXES.fetch(key, "_mysql_")
-      attrs[prefix + key.to_s] = val
+      gelf_attrs[prefix + key.to_s] = val
     end
-    attrs
+    gelf_attrs
   end
 
   private
@@ -175,8 +183,7 @@ class SlowQuery
 
     q.gsub!(/\bnull\b/, "?")   # Replace NULLs with "?"
 
-    # Collapse IN and VALUES lists
-    q.gsub!(/\b(in|values?)(?:[\s,]*\([\s?,]*\))+/, "\\1(?+)")
+    q.gsub!(/\b(in|values?)(?:[\s,]*\([\s?,]*\))+/, "\\1(?+)")                   # Collapse IN and VALUES lists
     q.gsub!(/\b(select\s.*?)(?:(\sunion(?:\sall)?)\s\1)+/, "\\1 /*repeat$2*/")   # Collapse UNIONs
     q.sub!(/\blimit \?(?:, ?\?| offset \?)?/, "limit ?")   # LIMITs and OFFSETs
     q.gsub(/\border by (.+?)\s+asc/, "order by \\1")       # Remove extraneous ASCs from ORDER BYs
@@ -191,14 +198,18 @@ end
 
 $graylog_host = "localhost"
 $graylog_port = 12201
+$delay = 0.1
 $verbose = false
+$foreground = false
 
-HELP_TEXT = "Usage: slow_query_exporter.rb [-v] [-h host] [-p port] slow_query.log
+HELP_TEXT = "Usage: slow_query_exporter.rb [-fv] [-d delay] [-h host] [-p port] slow_query.log
 Options:
-    -h, --host      The Graylog host
-    -p, --port      The Graylog port
-    -v, --verbose   Print entries to stdout as they're parsed
-    -?, --help      Display this help text
+    -h, --host         The Graylog host
+    -p, --port         The Graylog port
+    -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds
+    -v, --verbose      Print entries to stdout as they're parsed
+    -f, --foreground   Don't daemonize on startup
+    -?, --help         Display this help text
 "
 
 OptionParser.new do |opts|
@@ -206,19 +217,27 @@ OptionParser.new do |opts|
 
   opts.on("-h", "--host") { |host| $graylog_host = host }
   opts.on("-p", "--port") { |port| $graylog_port = port }
+  opts.on("-d", "--delay") { |delay| $delay = delay.to_f }
   opts.on("-v", "--verbose") { $verbose = true }
+  opts.on("-f", "--foreground") { $foreground = true }
   opts.on("-?", "--help") do
     $stderr.puts(HELP_TEXT)
     exit
   end
 end.parse!
 
-Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
-
 if ARGV.empty?
   $stderr.puts(HELP_TEXT)
   exit 1
 end
+
+Daemons.daemonize(dir_mode: :normal, dir: RUN_DIRECTORY) unless $foreground
+Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
+last_timestamp = begin
+                   IO.read(PROGRESS_FILE).to_i
+                 rescue Errno::ENOENT
+                   0
+                 end
 
 # We touch the logfile to make sure it exists before we start. Otherwise, "tail -F" will die.
 logfile = ARGV[0]
@@ -232,9 +251,13 @@ begin
   tail.each_line do |line|
     parser.parse_line(line)
     query = parser.pop_finished_query
-    if query
+    if query && query.timestamp >= last_timestamp
+      last_timestamp = query.timestamp
+      File.open(PROGRESS_FILE, "w") { |f| f.puts(last_timestamp) }
+
       puts query.gelf_attributes.inspect, "\n" if $verbose
       gelf.notify!(query.gelf_attributes)
+      sleep $delay    # avoids swamping the Graylog server
     end
   end
 
