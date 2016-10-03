@@ -12,10 +12,12 @@ differences in the slow query log format between them.
 ## Usage
 
 ```
-Usage: slow_query_exporter.rb [-v] [-h host] [-p port] slow_query.log
+Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] slow_query.log
 Options:
-    -h, --host      The Graylog host
-    -p, --port      The Graylog port
-    -v, --verbose   Print entries to stdout as they're parsed
-    -?, --help      Display this help text
+    -h, --host         The Graylog host
+    -p, --port         The Graylog port
+    -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds
+    -v, --verbose      Print entries to stdout as they're parsed
+    -f, --foreground   Don't daemonize on startup
+    -?, --help         Display this help text
 ```
