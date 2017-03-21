@@ -10,10 +10,10 @@ module SlowQueryExporter
     }
     PATTERNS = {
       header:   /(^Tcp port:|^Time\s+Id|started with:$)/,
-      skip:     /^(# Time: \d+|# Profile_|use \w+;)/,
+      skip:     /^(# Time: \d+|# Profile_|# No InnoDB statistics|use \w+;)/,
       userhost: /^# User@Host: (\S+)\[\S+\] @\s+\[(\S+)\]/,
-      thread:   /^# Thread_id: (\d+)\s+Schema: (\w+)\s+Last_errno: (\d+)\s+Killed: (\d+)/,
-      qtime:    /^# Query_time: (\S+)\s+Lock_time: (\S+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)\s+Rows_affected: (\d+)\s+Rows_read: (\d+)/,
+      schema:   /^# Schema: (\w+)\s+Last_errno: (\d+)\s+Killed: (\d+)/,
+      qtime:    /^# Query_time: (\S+)\s+Lock_time: (\S+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)\s+Rows_affected: (\d+)/,
       bytes:    /^# Bytes_sent: (\d+)\s+Tmp_tables: (\d+)\s+Tmp_disk_tables: (\d+)\s+Tmp_table_sizes: (\d+)/,
       trxid:    /^# InnoDB_trx_id: (\S+)/,
       qchit:    /^# QC_Hit: (\w+)\s+Full_scan: (\w+)\s+Full_join: (\w+)/,
@@ -22,7 +22,7 @@ module SlowQueryExporter
       innowait: /^#\s+InnoDB_rec_lock_wait: (\S+)\s+InnoDB_queue_wait: (\S+)/,
       innopage: /^#\s+InnoDB_pages_distinct: (\d+)/,
       time:     /^SET timestamp=(\d+)/,
-      query:    /^(SELECT|INSERT|UPDATE|DELETE)\b/,
+      query:    /^(SELECT|INSERT|UPDATE|DELETE|SHOW)\b/,
     }
 
     attr_accessor :attributes
@@ -39,18 +39,16 @@ module SlowQueryExporter
       when PATTERNS[:userhost]
         attributes[:user] = $1
         attributes[:host] = $2
-      when PATTERNS[:thread]
-        attributes[:thread_id] = $1.to_i
-        attributes[:schema] = $2
-        attributes[:errno] = $3.to_i
-        attributes[:killed] = $4.to_i > 0
+      when PATTERNS[:schema]
+        attributes[:schema] = $1
+        attributes[:errno] = $2.to_i
+        attributes[:killed] = $3.to_i > 0
       when PATTERNS[:qtime]
         attributes[:request_time] = $1.to_f
         attributes[:lock_time] = $2.to_f
         attributes[:rows_sent] = $3.to_i
         attributes[:rows_examined] = $4.to_i
         attributes[:rows_affected] = $5.to_i
-        attributes[:rows_read] = $6.to_i
       when PATTERNS[:bytes]
         attributes[:bytes_sent] = $1.to_i
         attributes[:tmp_tables] = $2.to_i

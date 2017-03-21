@@ -6,8 +6,8 @@ sees to Graylog.
 It sends slow queries to Graylog via UDP in GELF format. The key names are
 somewhat idiosyncratic to the particular corporate environment it hails
 from, so you might want to change them. It's only been tested against
-Percona Server, not stock MySQL; I'm uncertain if there are any substantial
-differences in the slow query log format between them.
+Percona Server 5.6, not stock MySQL; I'm uncertain if there are any
+substantial differences in the slow query log format between them.
 
 ## Usage
 
