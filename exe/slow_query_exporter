@@ -6,7 +6,7 @@ require 'optparse'
 require 'syslog'
 require 'slow_query_exporter'
 
-RUN_DIRECTORY = "/var/run/slow_query_exporter"
+RUN_DIRECTORY = "/var/lib/slow_query_exporter"
 PROGRESS_FILE = "#{RUN_DIRECTORY}/last_timestamp"
 
 $graylog_host = "localhost"
@@ -60,14 +60,15 @@ begin
   tail = IO.popen(["tail", "-F", "-n", "+0", logfile])
   tail.each_line do |line|
     parser.parse_line(line)
-    query = parser.pop_finished_query
-    if query && query.timestamp >= last_timestamp
-      last_timestamp = query.timestamp
-      File.open(PROGRESS_FILE, "w") { |f| f.puts(last_timestamp) }
+    while query = parser.pop_finished_query
+      if query.timestamp >= last_timestamp
+        last_timestamp = query.timestamp
+        File.open(PROGRESS_FILE, "w") { |f| f.puts(last_timestamp) }
 
-      puts query.gelf_attributes.inspect, "\n" if $verbose
-      gelf.notify!(query.gelf_attributes)
-      sleep $delay    # avoids swamping the Graylog server
+        puts query.gelf_attributes.inspect, "\n" if $verbose
+        gelf.notify!(query.gelf_attributes)
+        sleep $delay    # avoids swamping the Graylog server
+      end
     end
   end
 

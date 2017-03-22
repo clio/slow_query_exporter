@@ -1,11 +1,14 @@
 require 'digest/crc64'
+require 'socket'
 
 module SlowQueryExporter
   class SlowQuery
+    HOSTNAME = Socket.gethostname.freeze
+
     SPECIAL_PREFIXES = {
       query_string: "_",
       request_time: "_",
-      host: "_",
+      remote_addr: "_",
       timestamp: "",
     }
     PATTERNS = {
@@ -38,7 +41,7 @@ module SlowQueryExporter
       case line
       when PATTERNS[:userhost]
         attributes[:user] = $1
-        attributes[:host] = $2
+        attributes[:remote_addr] = $2
       when PATTERNS[:schema]
         attributes[:schema] = $1
         attributes[:errno] = $2.to_i
@@ -105,9 +108,10 @@ module SlowQueryExporter
       fingerprint = Digest::CRC64.hexdigest(normalized_query).upcase
       gelf_attrs = {
         "version" => "1.1",
-        "short_message" => sprintf("Slow query %s on %s: %.2f seconds", fingerprint, attributes[:host], attributes[:request_time]),
+        "short_message" => sprintf("Slow query %s on %s: %.2f seconds", fingerprint, HOSTNAME, attributes[:request_time]),
+        "host" => HOSTNAME,
         "_type" => "mysql-slow",
-        "_fingerprint" => fingerprint,
+        "_mysql_fingerprint" => fingerprint,
       }
       attributes.each do |key, val|
         prefix = SPECIAL_PREFIXES.fetch(key, "_mysql_")
