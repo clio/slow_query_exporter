@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'daemons'
-require 'fileutils'
 require 'gelf'
 require 'optparse'
 require 'syslog'
@@ -53,10 +52,7 @@ last_timestamp = begin
                    0
                  end
 
-# We touch the logfile to make sure it exists before we start. Otherwise, "tail -F" will die.
 logfile = ARGV[0]
-FileUtils.touch(logfile)
-
 gelf = GELF::Notifier.new($graylog_host, $graylog_port, "WAN")
 parser = SlowQueryExporter::QueryParser.new
 
