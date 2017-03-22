@@ -6,8 +6,9 @@ require 'optparse'
 require 'syslog'
 require 'slow_query_exporter'
 
-RUN_DIRECTORY = "/var/lib/slow_query_exporter"
-PROGRESS_FILE = "#{RUN_DIRECTORY}/last_timestamp"
+RUN_DIRECTORY = "/var/run/slow_query_exporter"
+LIB_DIRECTORY = "/var/lib/slow_query_exporter"
+PROGRESS_FILE = "#{LIB_DIRECTORY}/last_timestamp"
 
 $graylog_host = "localhost"
 $graylog_port = 12201
@@ -44,7 +45,7 @@ if ARGV.empty?
   exit 1
 end
 
-Daemons.daemonize(dir_mode: :normal, dir: RUN_DIRECTORY) unless $foreground
+Daemons.daemonize(ontop: $foreground, app_name: "slow_query_exporter", dir_mode: :normal, dir: RUN_DIRECTORY)
 Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
 last_timestamp = begin
                    IO.read(PROGRESS_FILE).to_i
