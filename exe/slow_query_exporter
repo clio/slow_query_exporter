@@ -18,9 +18,9 @@ $foreground = false
 
 HELP_TEXT = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] slow_query.log
 Options:
-    -h, --host         The Graylog host
-    -p, --port         The Graylog port
-    -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds
+    -h, --host         The GELF host (default: #{$graylog_host})
+    -p, --port         The GELF UDP port (default: #{$graylog_port})
+    -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)
     -v, --verbose      Print entries to stdout as they're parsed
     -f, --foreground   Don't daemonize on startup
     -?, --help         Display this help text
