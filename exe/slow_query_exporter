@@ -10,16 +10,16 @@ RUN_DIRECTORY = "/var/run/slow_query_exporter"
 LIB_DIRECTORY = "/var/lib/slow_query_exporter"
 PROGRESS_FILE = "#{LIB_DIRECTORY}/last_timestamp"
 
-$graylog_host = "localhost"
-$graylog_port = 12201
+$gelf_host = "localhost"
+$gelf_port = 12201
 $delay = 0.1
 $verbose = false
 $foreground = false
 
 HELP_TEXT = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] slow_query.log
 Options:
-    -h, --host         The GELF host (default: #{$graylog_host})
-    -p, --port         The GELF UDP port (default: #{$graylog_port})
+    -h, --host         The GELF host (default: #{$gelf_host})
+    -p, --port         The GELF UDP port (default: #{$gelf_port})
     -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)
     -v, --verbose      Print entries to stdout as they're parsed
     -f, --foreground   Don't daemonize on startup
@@ -29,8 +29,8 @@ Options:
 OptionParser.new do |opts|
   opts.banner = HELP_TEXT
 
-  opts.on("-h", "--host") { |host| $graylog_host = host }
-  opts.on("-p", "--port") { |port| $graylog_port = port }
+  opts.on("-h", "--host") { |host| $gelf_host = host }
+  opts.on("-p", "--port") { |port| $gelf_port = port }
   opts.on("-d", "--delay") { |delay| $delay = delay.to_f }
   opts.on("-v", "--verbose") { $verbose = true }
   opts.on("-f", "--foreground") { $foreground = true }
@@ -54,7 +54,7 @@ last_timestamp = begin
                  end
 
 logfile = ARGV[0]
-gelf = GELF::Notifier.new($graylog_host, $graylog_port, "WAN")
+gelf = GELF::Notifier.new($gelf_host, $gelf_port, "WAN")
 parser = SlowQueryExporter::QueryParser.new
 
 begin
