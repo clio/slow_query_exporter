@@ -16,33 +16,33 @@ $delay = 0.1
 $verbose = false
 $foreground = false
 
-HELP_TEXT = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] slow_query.log
-Options:
-    -h, --host         The GELF host (default: #{$gelf_host})
-    -p, --port         The GELF UDP port (default: #{$gelf_port})
-    -d, --delay        An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)
-    -v, --verbose      Print entries to stdout as they're parsed
-    -f, --foreground   Don't daemonize on startup
-    -?, --help         Display this help text
-"
-
-OptionParser.new do |opts|
-  opts.banner = HELP_TEXT
-
-  opts.on("-h", "--host") { |host| $gelf_host = host }
-  opts.on("-p", "--port") { |port| $gelf_port = port }
-  opts.on("-d", "--delay") { |delay| $delay = delay.to_f }
-  opts.on("-v", "--verbose") { $verbose = true }
-  opts.on("-f", "--foreground") { $foreground = true }
-  opts.on("-?", "--help") do
-    $stderr.puts(HELP_TEXT)
+opts = OptionParser.new do |opts|
+  opts.banner = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] /path/to/slow_query.log"
+  opts.version = SlowQueryExporter::VERSION
+  opts.summary_width = 22
+  opts.on("-d SECONDS", "--delay SECONDS", Float, "An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)") { |delay| $delay = delay.to_f }
+  opts.on("-f", "--foreground", "Don't daemonize on startup") { $foreground = true }
+  opts.on("-?", "--help", "Display this help text") do
+    puts(opts)
     exit
   end
-end.parse!
-
-if ARGV.empty?
-  $stderr.puts(HELP_TEXT)
-  exit 1
+  opts.on("-h HOST", "--host HOST", "The GELF host (default: #{$gelf_host})") { |host| $gelf_host = host }
+  opts.on("-p PORT", "--port PORT", Integer, "The GELF UDP port (default: #{$gelf_port})") { |port| $gelf_port = port }
+  opts.on("-v", "--[no-]verbose", "Print entries to stdout as they're parsed") { $verbose = true }
+  opts.on("--version", "Display application version information") do
+    puts(opts.version)
+    exit
+  end
+end
+begin
+  opts.parse!
+  raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
+  raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
+rescue OptionParser::InvalidOption, OptionParser::InvalidArgument, OptionParser::MissingArgument => e
+  $stderr.puts(e)
+  $stderr.puts
+  $stderr.puts(opts)
+  exit 2
 end
 
 Daemons.daemonize(ontop: $foreground, app_name: "slow_query_exporter", dir_mode: :normal, dir: RUN_DIRECTORY)
