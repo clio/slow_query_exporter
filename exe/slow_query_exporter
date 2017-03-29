@@ -4,9 +4,6 @@ require 'pentagram'
 require 'slow_query_exporter'
 require 'syslog'
 
-LIB_DIRECTORY = "/var/lib/slow_query_exporter"
-PROGRESS_FILE = "#{LIB_DIRECTORY}/last_timestamp"
-
 module SlowQueryExporter
   class Daemon < Pentagram::Daemon
     def initialize
@@ -33,11 +30,23 @@ module SlowQueryExporter
         options[:gelf_port] = port
       end
 
+      options[:state_path] ||= "/var/lib/slow_query_exporter/last_timestamp"
+      option_parser.on(
+        "-s PATH", "--state PATH",
+        "The path to the file to be used for daemon state storage (default: #{options[:state_path]})."
+      ) do |path|
+        options[:state_path] = path
+      end
+
       Syslog.open(File.basename(__FILE__), Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
     end
 
     def parse_arguments!
       super
+      parent = File.dirname(options[:state_path])
+      unless File.exist?(parent)
+        raise OptionParser::InvalidArgument.new("--state #{options[:state_path]} - directory #{parent} does not exist")
+      end
       raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
       raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
     end
@@ -75,7 +84,7 @@ module SlowQueryExporter
 
     def hook_pre_main
       @current_timestamp = begin
-        IO.read(PROGRESS_FILE).to_i
+        IO.read(options[:state_path]).to_i
       rescue Errno::ENOENT
         0
       end
@@ -95,7 +104,7 @@ module SlowQueryExporter
         while query = @parser.pop_finished_query
           if query.timestamp >= @current_timestamp
             @current_timestamp = query.timestamp
-            File.open(PROGRESS_FILE, "w") { |f| f.puts(@current_timestamp) }
+            File.open(options[:state_path], "w") { |f| f.puts(@current_timestamp) }
             puts query.gelf_attributes.inspect, "\n" if options[:verbose]
             @gelf.notify!(query.gelf_attributes)
           end
