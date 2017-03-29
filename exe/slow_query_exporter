@@ -1,78 +1,113 @@
 #!/usr/bin/env ruby
-
-require 'daemons'
 require 'gelf'
-require 'optparse'
-require 'syslog'
+require 'pentagram'
 require 'slow_query_exporter'
+require 'syslog'
 
-RUN_DIRECTORY = "/var/run/slow_query_exporter"
 LIB_DIRECTORY = "/var/lib/slow_query_exporter"
 PROGRESS_FILE = "#{LIB_DIRECTORY}/last_timestamp"
 
-$gelf_host = "localhost"
-$gelf_port = 12201
-$delay = 0.1
-$verbose = false
-$foreground = false
+module SlowQueryExporter
+  class Daemon < Pentagram::Daemon
+    def initialize
+      super
 
-opts = OptionParser.new do |opts|
-  opts.banner = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] /path/to/slow_query.log"
-  opts.version = SlowQueryExporter::VERSION
-  opts.summary_width = 22
-  opts.on("-d SECONDS", "--delay SECONDS", Float, "An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)") { |delay| $delay = delay.to_f }
-  opts.on("-f", "--foreground", "Don't daemonize on startup") { $foreground = true }
-  opts.on("-?", "--help", "Display this help text") do
-    puts(opts)
-    exit
-  end
-  opts.on("-h HOST", "--host HOST", "The GELF host (default: #{$gelf_host})") { |host| $gelf_host = host }
-  opts.on("-p PORT", "--port PORT", Integer, "The GELF UDP port (default: #{$gelf_port})") { |port| $gelf_port = port }
-  opts.on("-v", "--[no-]verbose", "Print entries to stdout as they're parsed") { $verbose = true }
-  opts.on("--version", "Display application version information") do
-    puts(opts.version)
-    exit
-  end
-end
-begin
-  opts.parse!
-  raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
-  raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
-rescue OptionParser::InvalidOption, OptionParser::InvalidArgument, OptionParser::MissingArgument => e
-  $stderr.puts(e)
-  $stderr.puts
-  $stderr.puts(opts)
-  exit 2
-end
+      option_parser.banner = "#{File.basename(__FILE__)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
+      option_parser.version = SlowQueryExporter::VERSION
+      option_parser.summary_width = 22
 
-Daemons.daemonize(ontop: $foreground, app_name: "slow_query_exporter", dir_mode: :normal, dir: RUN_DIRECTORY)
-Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
-last_timestamp = begin
-                   IO.read(PROGRESS_FILE).to_i
-                 rescue Errno::ENOENT
-                   0
-                 end
+      options[:gelf_host] ||= "localhost"
+      option_parser.on(
+        "-h HOST", "--host HOST",
+        "The GELF host (default: #{options[:gelf_host]})"
+      ) do |host|
+        options[:gelf_host] = host
+      end
 
-logfile = ARGV[0]
-gelf = GELF::Notifier.new($gelf_host, $gelf_port, "WAN")
-parser = SlowQueryExporter::QueryParser.new
+      options[:gelf_port] ||= 12201
+      option_parser.on(
+        "-p PORT", "--port PORT", Integer,
+        "The GELF UDP port (default: #{options[:gelf_port]})"
+      ) do |port|
+        raise OptionParser::InvalidArgument.new("port must be above zero") unless port > 0
+        options[:gelf_port] = port
+      end
 
-begin
-  tail = IO.popen(["tail", "-F", "-n", "+0", logfile])
-  tail.each_line do |line|
-    parser.parse_line(line)
-    while query = parser.pop_finished_query
-      if query.timestamp >= last_timestamp
-        last_timestamp = query.timestamp
-        File.open(PROGRESS_FILE, "w") { |f| f.puts(last_timestamp) }
+      Syslog.open(File.basename(__FILE__), Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
+    end
 
-        puts query.gelf_attributes.inspect, "\n" if $verbose
-        gelf.notify!(query.gelf_attributes)
-        sleep $delay    # avoids swamping the Graylog server
+    def parse_arguments!
+      super
+      raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
+      raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
+    end
+
+    # Read a line of input (with a 'line' as defined by the separator argument) from the given file descriptor. If
+    # <timeout> seconds expire before enough data is available to return a line of data, raises IO::WaitReadable. Note
+    # that timeout is only enforced when the method is waiting for more data, which means that if the method is busy
+    # reading a _very_ long line of data, the entire execution may take longer than <timeout> seconds.
+    private def gets_with_timeout(fd, timeout, separator: $/)
+      @gets_buffer ||= []
+      timeout = Time.now.to_f + timeout
+      begin
+        while byte = fd.read_nonblock(1)
+          @gets_buffer << byte
+          if byte == separator
+            line = @gets_buffer.join('')
+            @gets_buffer.clear
+            return line
+          end
+        end
+      rescue EOFError
+        if @gets_buffer.size > 0
+          line = @gets_buffer.join('')
+          @gets_buffer.clear
+          return line
+        end
+        return nil
+      rescue IO::WaitReadable
+        now = Time.now.to_f
+        raise if now >= timeout
+        raise if IO.select([fd], nil, nil, timeout - now).nil?
+        retry
       end
     end
-  end
 
-ensure
-  Process.kill("INT", tail.pid) if tail
+    def hook_pre_main
+      @current_timestamp = begin
+        IO.read(PROGRESS_FILE).to_i
+      rescue Errno::ENOENT
+        0
+      end
+      @gelf = GELF::Notifier.new(options[:gelf_host], options[:gelf_port], "WAN")
+      @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
+      @parser = SlowQueryExporter::QueryParser.new
+    end
+
+    def hook_main
+      begin
+        line = gets_with_timeout(@tail, 0.1)
+        if line.nil?
+          @@continue = false
+          return
+        end
+        @parser.parse_line(line)
+        while query = @parser.pop_finished_query
+          if query.timestamp >= @current_timestamp
+            @current_timestamp = query.timestamp
+            File.open(PROGRESS_FILE, "w") { |f| f.puts(@current_timestamp) }
+            puts query.gelf_attributes.inspect, "\n" if options[:verbose]
+            @gelf.notify!(query.gelf_attributes)
+          end
+        end
+      rescue IO::WaitReadable
+      end
+    end
+
+    def hook_post_main
+      Process.kill("INT", @tail.pid) if @tail
+    end
+  end
 end
+
+SlowQueryExporter::Daemon.new.run
