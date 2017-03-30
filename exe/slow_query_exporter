@@ -6,7 +6,13 @@ require 'syslog'
 
 module SlowQueryExporter
   class Daemon < Pentagram::Daemon
+    # CHUNK_SIZE defines the maximum amount of data that will be read from our slow query log during each main loop
+    # iteration. We may get _less_ data than this, but we'll never get _more_ data than this. The data read may contain
+    # any number of complete lines (anywhere from 0 to N).
+    CHUNK_SIZE = 8192
+
     def initialize
+      options[:sleep] ||= 1
       super
 
       option_parser.banner = "#{File.basename(__FILE__)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
@@ -51,37 +57,6 @@ module SlowQueryExporter
       raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
     end
 
-    # Read a line of input (with a 'line' as defined by the separator argument) from the given file descriptor. If
-    # <timeout> seconds expire before enough data is available to return a line of data, raises IO::WaitReadable. Note
-    # that timeout is only enforced when the method is waiting for more data, which means that if the method is busy
-    # reading a _very_ long line of data, the entire execution may take longer than <timeout> seconds.
-    private def gets_with_timeout(fd, timeout, separator: $/)
-      @gets_buffer ||= []
-      timeout = Time.now.to_f + timeout
-      begin
-        while byte = fd.read_nonblock(1)
-          @gets_buffer << byte
-          if byte == separator
-            line = @gets_buffer.join('')
-            @gets_buffer.clear
-            return line
-          end
-        end
-      rescue EOFError
-        if @gets_buffer.size > 0
-          line = @gets_buffer.join('')
-          @gets_buffer.clear
-          return line
-        end
-        return nil
-      rescue IO::WaitReadable
-        now = Time.now.to_f
-        raise if now >= timeout
-        raise if IO.select([fd], nil, nil, timeout - now).nil?
-        retry
-      end
-    end
-
     def hook_pre_main
       @current_timestamp = begin
         IO.read(options[:state_path]).to_i
@@ -89,17 +64,27 @@ module SlowQueryExporter
         0
       end
       @gelf = GELF::Notifier.new(options[:gelf_host], options[:gelf_port], "WAN")
-      @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
+      @input_buffer = []
       @parser = SlowQueryExporter::QueryParser.new
+      @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
     end
 
     def hook_main
-      begin
-        line = gets_with_timeout(@tail, 0.1)
-        if line.nil?
-          @@continue = false
-          return
+      if IO.select([@tail], nil, nil, 0)
+        chunk = @tail.read_nonblock(CHUNK_SIZE)
+        @input_buffer.concat(chunk.split(/(?<=#{$/})/))
+      end
+      while @input_buffer.length > 0
+        until @input_buffer[0].end_with?($/)
+          # Break out of this iteration of our main loop (returning to read more data) if we don't yet have a complete
+          # line and we have no further data pending concatenation to our string.
+          return if @input_buffer.length < 2
+          @input_buffer[0] += @input_buffer.delete_at(1)
         end
+        line = @input_buffer.shift
+        # The MySQL slow query log is stored as UTF-8, but since we have read from the file as a binary operation (not
+        # as a string operation), our data is ASCII-8BIT. Force it to recognize itself as a UTF-8 string.
+        line.force_encoding("utf-8")
         @parser.parse_line(line)
         while query = @parser.pop_finished_query
           if query.timestamp >= @current_timestamp
@@ -109,7 +94,6 @@ module SlowQueryExporter
             @gelf.notify!(query.gelf_attributes)
           end
         end
-      rescue IO::WaitReadable
       end
     end
 
