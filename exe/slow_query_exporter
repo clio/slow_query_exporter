@@ -12,7 +12,6 @@ module SlowQueryExporter
     CHUNK_SIZE = 8192
 
     def initialize
-      options[:sleep] ||= 1
       super
 
       option_parser.banner = "#{File.basename(__FILE__)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
@@ -67,12 +66,18 @@ module SlowQueryExporter
       @input_buffer = []
       @parser = SlowQueryExporter::QueryParser.new
       @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
+      trap("EXIT") { Process.kill("INT", @tail.pid) if @tail }
     end
 
     def hook_main
-      if IO.select([@tail], nil, nil, 0)
-        chunk = @tail.read_nonblock(CHUNK_SIZE)
-        @input_buffer.concat(chunk.split(/(?<=#{$/})/))
+      begin
+        ready_io = Pentagram::SignalBroker.select([@tail])
+        if ready_io && ready_io.first && ready_io.first.include?(@tail)
+          chunk = @tail.read_nonblock(CHUNK_SIZE)
+          @input_buffer.concat(chunk.split(/(?<=#{$/})/))
+        end
+      rescue EOFError
+        @@continue = false
       end
       while @input_buffer.length > 0
         until @input_buffer[0].end_with?($/)
@@ -95,10 +100,6 @@ module SlowQueryExporter
           end
         end
       end
-    end
-
-    def hook_post_main
-      Process.kill("INT", @tail.pid) if @tail
     end
   end
 end
