@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 require 'gelf'
 require 'pentagram'
+require 'resolv'
 require 'slow_query_exporter'
 require 'syslog'
 
@@ -18,18 +19,23 @@ module SlowQueryExporter
       option_parser.version = SlowQueryExporter::VERSION
       option_parser.summary_width = 22
 
-      options[:gelf_host] ||= "localhost"
+      options[:gelf_host] ||= "127.0.0.1"
       option_parser.on(
         "-h HOST", "--host HOST",
-        "The GELF host (default: #{options[:gelf_host]})"
+        "target GELF host (default: #{options[:gelf_host]})"
       ) do |host|
+        begin
+          Resolv::DNS.new.getaddress(host)
+        rescue Resolv::ResolvError => e
+          raise OptionParser::InvalidArgument.new("'#{host}' name resolution failed (#{e})")
+        end
         options[:gelf_host] = host
       end
 
       options[:gelf_port] ||= 12201
       option_parser.on(
         "-p PORT", "--port PORT", Integer,
-        "The GELF UDP port (default: #{options[:gelf_port]})"
+        "target GELF UDP port (default: #{options[:gelf_port]})"
       ) do |port|
         raise OptionParser::InvalidArgument.new("port must be above zero") unless port > 0
         options[:gelf_port] = port
