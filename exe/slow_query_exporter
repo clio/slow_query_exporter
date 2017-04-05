@@ -1,9 +1,11 @@
 #!/usr/bin/env ruby
 require 'gelf'
+require 'log4r'
+require 'log4r/outputter/syslogoutputter'
+require 'log4r/yamlconfigurator'
 require 'pentagram'
 require 'resolv'
 require 'slow_query_exporter'
-require 'syslog'
 
 module SlowQueryExporter
   class Daemon < Pentagram::Daemon
@@ -13,9 +15,14 @@ module SlowQueryExporter
     CHUNK_SIZE = 8192
 
     def initialize
+      log4r_config = File.join(Gem::Specification.find_by_name("slow_query_exporter").gem_dir, "config", "log4r.yaml")
+      Log4r::YamlConfigurator["IDENT"] = File.basename($0)
+      Log4r::YamlConfigurator.load_yaml_file(log4r_config)
+      self.logger = Log4r::Logger["sqe"]
+      self.logger.level = Log4r::INFO
       super
 
-      option_parser.banner = "#{File.basename(__FILE__)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
+      option_parser.banner = "#{File.basename($0)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
       option_parser.version = SlowQueryExporter::VERSION
       option_parser.summary_width = 22
 
@@ -48,8 +55,6 @@ module SlowQueryExporter
       ) do |path|
         options[:state_path] = path
       end
-
-      Syslog.open(File.basename(__FILE__), Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
     end
 
     def parse_arguments!
@@ -63,6 +68,10 @@ module SlowQueryExporter
     end
 
     def hook_pre_main
+      if options[:daemonize]
+        Log4r::Logger["sqe::bg"].level = Log4r::Logger["sqe"].level
+        self.logger = Log4r::Logger["sqe::bg"]
+      end
       @current_timestamp = begin
         IO.read(options[:state_path]).to_i
       rescue Errno::ENOENT
@@ -70,7 +79,7 @@ module SlowQueryExporter
       end
       @gelf = GELF::Notifier.new(options[:gelf_host], options[:gelf_port], "WAN")
       @input_buffer = []
-      @parser = SlowQueryExporter::QueryParser.new
+      @parser = SlowQueryExporter::QueryParser.new(logger)
       @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
       trap("EXIT") { Process.kill("INT", @tail.pid) if @tail }
     end
@@ -101,7 +110,7 @@ module SlowQueryExporter
           if query.timestamp >= @current_timestamp
             @current_timestamp = query.timestamp
             File.open(options[:state_path], "w") { |f| f.puts(@current_timestamp) }
-            puts query.gelf_attributes.inspect, "\n" if options[:verbose]
+            logger.debug(query.gelf_attributes.inspect)
             @gelf.notify!(query.gelf_attributes)
           end
         end

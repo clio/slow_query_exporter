@@ -1,7 +1,8 @@
 module SlowQueryExporter
   class QueryParser
-    def initialize
+    def initialize(logger)
       @buffer = ""
+      @logger = logger
       @parsed = []
       reset!
     end
@@ -17,7 +18,7 @@ module SlowQueryExporter
         @query = SlowQuery.new
       end
     rescue => e
-      Syslog.err(e.message)
+      @logger.error(e.message)
       reset!
     end
 
