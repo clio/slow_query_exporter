@@ -25,7 +25,7 @@ module SlowQueryExporter
       innowait: /^#\s+InnoDB_rec_lock_wait: (\S+)\s+InnoDB_queue_wait: (\S+)/,
       innopage: /^#\s+InnoDB_pages_distinct: (\d+)/,
       time:     /^SET timestamp=(\d+)/,
-      query:    /^(SELECT|INSERT|UPDATE|DELETE|SHOW)\b/,
+      query:    /^(DELETE|EXPLAIN|INSERT|REPLACE|SELECT|SHOW|UPDATE)\b/,
     }
 
     attr_accessor :attributes
