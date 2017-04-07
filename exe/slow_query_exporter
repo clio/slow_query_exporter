@@ -1,78 +1,122 @@
 #!/usr/bin/env ruby
-
-require 'daemons'
 require 'gelf'
-require 'optparse'
-require 'syslog'
+require 'log4r'
+require 'log4r/outputter/syslogoutputter'
+require 'log4r/yamlconfigurator'
+require 'pentagram'
+require 'resolv'
 require 'slow_query_exporter'
 
-RUN_DIRECTORY = "/var/run/slow_query_exporter"
-LIB_DIRECTORY = "/var/lib/slow_query_exporter"
-PROGRESS_FILE = "#{LIB_DIRECTORY}/last_timestamp"
+module SlowQueryExporter
+  class Daemon < Pentagram::Daemon
+    # CHUNK_SIZE defines the maximum amount of data that will be read from our slow query log during each main loop
+    # iteration. We may get _less_ data than this, but we'll never get _more_ data than this. The data read may contain
+    # any number of complete lines (anywhere from 0 to N).
+    CHUNK_SIZE = 8192
 
-$gelf_host = "localhost"
-$gelf_port = 12201
-$delay = 0.1
-$verbose = false
-$foreground = false
+    def initialize
+      log4r_config = File.join(Gem::Specification.find_by_name("slow_query_exporter").gem_dir, "config", "log4r.yaml")
+      Log4r::YamlConfigurator["IDENT"] = File.basename($0)
+      Log4r::YamlConfigurator.load_yaml_file(log4r_config)
+      self.logger = Log4r::Logger["sqe"]
+      self.logger.level = Log4r::INFO
+      super
 
-opts = OptionParser.new do |opts|
-  opts.banner = "Usage: slow_query_exporter [-fv] [-d delay] [-h host] [-p port] /path/to/slow_query.log"
-  opts.version = SlowQueryExporter::VERSION
-  opts.summary_width = 22
-  opts.on("-d SECONDS", "--delay SECONDS", Float, "An interval to pause after each GELF message, in (possibly fractional) seconds (default: #{$delay}s)") { |delay| $delay = delay.to_f }
-  opts.on("-f", "--foreground", "Don't daemonize on startup") { $foreground = true }
-  opts.on("-?", "--help", "Display this help text") do
-    puts(opts)
-    exit
-  end
-  opts.on("-h HOST", "--host HOST", "The GELF host (default: #{$gelf_host})") { |host| $gelf_host = host }
-  opts.on("-p PORT", "--port PORT", Integer, "The GELF UDP port (default: #{$gelf_port})") { |port| $gelf_port = port }
-  opts.on("-v", "--[no-]verbose", "Print entries to stdout as they're parsed") { $verbose = true }
-  opts.on("--version", "Display application version information") do
-    puts(opts.version)
-    exit
-  end
-end
-begin
-  opts.parse!
-  raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
-  raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
-rescue OptionParser::InvalidOption, OptionParser::InvalidArgument, OptionParser::MissingArgument => e
-  $stderr.puts(e)
-  $stderr.puts
-  $stderr.puts(opts)
-  exit 2
-end
+      option_parser.banner = "#{File.basename($0)} [-dv] [--sleep delay] [-h host] [-p port] [options] /path/to/slow_query.log"
+      option_parser.version = SlowQueryExporter::VERSION
+      option_parser.summary_width = 22
 
-Daemons.daemonize(ontop: $foreground, app_name: "slow_query_exporter", dir_mode: :normal, dir: RUN_DIRECTORY)
-Syslog.open("slow_query_exporter", Syslog::LOG_PID | Syslog::LOG_PERROR, Syslog::LOG_DAEMON)
-last_timestamp = begin
-                   IO.read(PROGRESS_FILE).to_i
-                 rescue Errno::ENOENT
-                   0
-                 end
+      options[:gelf_host] ||= "127.0.0.1"
+      option_parser.on(
+        "-h HOST", "--host HOST",
+        "target GELF host (default: #{options[:gelf_host]})"
+      ) do |host|
+        begin
+          Resolv::DNS.new.getaddress(host)
+        rescue Resolv::ResolvError => e
+          raise OptionParser::InvalidArgument.new("'#{host}' name resolution failed (#{e})")
+        end
+        options[:gelf_host] = host
+      end
 
-logfile = ARGV[0]
-gelf = GELF::Notifier.new($gelf_host, $gelf_port, "WAN")
-parser = SlowQueryExporter::QueryParser.new
+      options[:gelf_port] ||= 12201
+      option_parser.on(
+        "-p PORT", "--port PORT", Integer,
+        "target GELF UDP port (default: #{options[:gelf_port]})"
+      ) do |port|
+        raise OptionParser::InvalidArgument.new("port must be above zero") unless port > 0
+        options[:gelf_port] = port
+      end
 
-begin
-  tail = IO.popen(["tail", "-F", "-n", "+0", logfile])
-  tail.each_line do |line|
-    parser.parse_line(line)
-    while query = parser.pop_finished_query
-      if query.timestamp >= last_timestamp
-        last_timestamp = query.timestamp
-        File.open(PROGRESS_FILE, "w") { |f| f.puts(last_timestamp) }
+      options[:state_path] ||= "/var/lib/slow_query_exporter/last_timestamp"
+      option_parser.on(
+        "-s PATH", "--state PATH",
+        "The path to the file to be used for daemon state storage (default: #{options[:state_path]})."
+      ) do |path|
+        options[:state_path] = path
+      end
+    end
 
-        puts query.gelf_attributes.inspect, "\n" if $verbose
-        gelf.notify!(query.gelf_attributes)
-        sleep $delay    # avoids swamping the Graylog server
+    def parse_arguments!
+      super
+      parent = File.dirname(options[:state_path])
+      unless File.exist?(parent)
+        raise OptionParser::InvalidArgument.new("--state #{options[:state_path]} - directory #{parent} does not exist")
+      end
+      raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
+      raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
+    end
+
+    def hook_pre_main
+      if options[:daemonize]
+        Log4r::Logger["sqe::bg"].level = Log4r::Logger["sqe"].level
+        self.logger = Log4r::Logger["sqe::bg"]
+      end
+      @current_timestamp = begin
+        IO.read(options[:state_path]).to_i
+      rescue Errno::ENOENT
+        0
+      end
+      @gelf = GELF::Notifier.new(options[:gelf_host], options[:gelf_port], "WAN")
+      @input_buffer = []
+      @parser = SlowQueryExporter::QueryParser.new(logger)
+      @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
+      trap("EXIT") { Process.kill("INT", @tail.pid) if @tail }
+    end
+
+    def hook_main
+      begin
+        ready_io = Pentagram::SignalBroker.select([@tail])
+        if ready_io && ready_io.first && ready_io.first.include?(@tail)
+          chunk = @tail.read_nonblock(CHUNK_SIZE)
+          @input_buffer.concat(chunk.split(/(?<=#{$/})/))
+        end
+      rescue EOFError
+        @@continue = false
+      end
+      while @input_buffer.length > 0
+        until @input_buffer[0].end_with?($/)
+          # Break out of this iteration of our main loop (returning to read more data) if we don't yet have a complete
+          # line and we have no further data pending concatenation to our string.
+          return if @input_buffer.length < 2
+          @input_buffer[0] += @input_buffer.delete_at(1)
+        end
+        line = @input_buffer.shift
+        # The MySQL slow query log is stored as UTF-8, but since we have read from the file as a binary operation (not
+        # as a string operation), our data is ASCII-8BIT. Force it to recognize itself as a UTF-8 string.
+        line.force_encoding("utf-8")
+        @parser.parse_line(line)
+        while query = @parser.pop_finished_query
+          if query.timestamp >= @current_timestamp
+            @current_timestamp = query.timestamp
+            File.open(options[:state_path], "w") { |f| f.puts(@current_timestamp) }
+            logger.debug(query.gelf_attributes.inspect)
+            @gelf.notify!(query.gelf_attributes)
+          end
+        end
       end
     end
   end
-
-ensure
-  Process.kill("INT", tail.pid) if tail
 end
+
+SlowQueryExporter::Daemon.new.run

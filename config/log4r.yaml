@@ -1,0 +1,48 @@
+log4r_config:
+  loggers:
+    - name      : 'sqe'
+      trace     : false
+      outputters:
+        - stdout
+        - stderr
+    - name      : 'sqe::bg'
+      trace     : false
+      outputters:
+        - syslog
+  outputters:
+    - type     : StderrOutputter
+      only_at  :
+        - WARN
+        - ERROR
+        - FATAL
+      name     : stderr
+      formatter:
+        date_pattern: '%Y-%m-%d %H:%M:%S'
+        pattern     : '%d #{IDENT}[%p]: <%l> %M'
+        type        : PatternFormatter
+    - type     : StdoutOutputter
+      only_at  :
+        - DEBUG
+        - INFO
+      name     : stdout
+      formatter:
+        date_pattern: '%Y-%m-%d %H:%M:%S'
+        pattern     : '%d #{IDENT}[%p]: <%l> %M'
+        type        : PatternFormatter
+    - type     : SyslogOutputter
+      name     : syslog
+      #
+      # 152 is Syslog::LOG_LOCAL3
+      #
+      # Note that this value has to parse into a String object on YAML interpretation,
+      # but cannot actually BE A STRING, as the underlying Syslog object requires its
+      # facility argument to be an integer representing the target log facility.
+      #
+      # This is why '152' (note the quotes) is used rather than any of:
+      #   152, LOG_LOCAL3, LOCAL3, or Syslog::LOG_LOCAL3
+      #
+      facility : '152'
+      ident    : '#{IDENT}'
+      formatter:
+        pattern     : '<%l> %m'
+        type        : PatternFormatter
