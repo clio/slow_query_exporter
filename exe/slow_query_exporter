@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+
 require 'gelf'
 require 'log4r'
 require 'log4r/outputter/syslogoutputter'
@@ -13,6 +14,8 @@ module SlowQueryExporter
     # iteration. We may get _less_ data than this, but we'll never get _more_ data than this. The data read may contain
     # any number of complete lines (anywhere from 0 to N).
     CHUNK_SIZE = 8192
+
+    attr_accessor :slow_query_log
 
     def initialize
       log4r_config = File.join(Gem::Specification.find_by_name("slow_query_exporter").gem_dir, "config", "log4r.yaml")
@@ -53,7 +56,7 @@ module SlowQueryExporter
         "-s PATH", "--state PATH",
         "The path to the file to be used for daemon state storage (default: #{options[:state_path]})."
       ) do |path|
-        options[:state_path] = path
+        options[:state_path] = File.realdirpath(path)
       end
     end
 
@@ -65,6 +68,7 @@ module SlowQueryExporter
       end
       raise OptionParser::MissingArgument.new("/path/to/slow_query.log is required") if ARGV.empty?
       raise OptionParser::InvalidArgument.new("#{ARGV.slice(1, ARGV.size).join(' ')}") if ARGV.size > 1
+      self.slow_query_log = File.realdirpath(ARGV[0])
     end
 
     def hook_pre_main
@@ -80,7 +84,7 @@ module SlowQueryExporter
       @gelf = GELF::Notifier.new(options[:gelf_host], options[:gelf_port], "WAN")
       @input_buffer = []
       @parser = SlowQueryExporter::QueryParser.new(logger)
-      @tail = IO.popen(["tail", "-F", "-n", "+0", ARGV[0]])
+      @tail = IO.popen(["tail", "-F", "-n", "+0", slow_query_log])
       trap("EXIT") { Process.kill("INT", @tail.pid) if @tail }
     end
 
