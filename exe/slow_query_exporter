@@ -36,7 +36,7 @@ module SlowQueryExporter
       ) do |host|
         if host !~ /^\d+\.\d+\.\d+\.\d+$/
           begin
-            host = Resolv::DNS.new.getaddress(host)
+            host = Resolv::DNS.new.getaddress(host).to_s
           rescue Resolv::ResolvError => e
             raise OptionParser::InvalidArgument.new("'#{host}' name resolution failed (#{e})")
           end
