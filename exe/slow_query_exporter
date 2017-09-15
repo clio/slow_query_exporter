@@ -34,10 +34,12 @@ module SlowQueryExporter
         "-h HOST", "--host HOST",
         "target GELF host (default: #{options[:gelf_host]})"
       ) do |host|
-        begin
-          Resolv::DNS.new.getaddress(host)
-        rescue Resolv::ResolvError => e
-          raise OptionParser::InvalidArgument.new("'#{host}' name resolution failed (#{e})")
+        if host !~ /^\d+\.\d+\.\d+\.\d+$/
+          begin
+            host = Resolv::DNS.new.getaddress(host)
+          rescue Resolv::ResolvError => e
+            raise OptionParser::InvalidArgument.new("'#{host}' name resolution failed (#{e})")
+          end
         end
         options[:gelf_host] = host
       end
