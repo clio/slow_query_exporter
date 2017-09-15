@@ -101,11 +101,14 @@ module SlowQueryExporter
       line = compress(line)
       line = " " << line if !attributes[:query_string].empty?
       attributes[:query_string] += line
-      @done = true if attributes[:query_string] =~ /;$/
+      if attributes[:query_string] =~ /;$/
+        attributes[:query_string] = normalized_query(attributes[:query_string])
+        @done = true
+      end
     end
 
     def gelf_attributes
-      fingerprint = Digest::CRC64.hexdigest(normalized_query).upcase
+      fingerprint = Digest::CRC64.hexdigest(attributes[:query_string]).upcase
       gelf_attrs = {
         "version" => "1.1",
         "short_message" => sprintf("Slow query %s on %s: %.2f seconds", fingerprint, HOSTNAME, attributes[:request_time]),
@@ -124,36 +127,35 @@ module SlowQueryExporter
 
     # This is just a straight port of pt-query-digest's Perl fingerprint function.
     # The ugly regexps aren't my fault! :-D
-    def normalized_query
-      q = attributes[:query_string].dup
-      return "mysqldump" if q =~ %r{\ASELECT /\*!40001 SQL_NO_CACHE \*/ \* FROM `}
-      return "percona-toolkit" if q =~ %r{/\*\w+\.\w+:[0-9]/[0-9]\*/}
-      return q if q =~ /\Aadministrator command: /i
-      return $1.downcase if q =~ /\A\s*(call\s+\S+)\(/i
+    def normalized_query(sql)
+      return "mysqldump" if sql =~ %r{\ASELECT /\*!40001 SQL_NO_CACHE \*/ \* FROM `}
+      return "percona-toolkit" if sql =~ %r{/\*\w+\.\w+:[0-9]/[0-9]\*/}
+      return sql if sql =~ /\Aadministrator command: /i
+      return $1.downcase if sql =~ /\A\s*(call\s+\S+)\(/i
 
       # Truncate multi-value INSERT statements
-      q = $1 if q =~ /\A((?:INSERT|REPLACE)(?: IGNORE)?\s+INTO.+?VALUES\s*\(.*?\))\s*,\s*\(/im
+      sql = $1 if sql =~ /\A((?:INSERT|REPLACE)(?: IGNORE)?\s+INTO.+?VALUES\s*\(.*?\))\s*,\s*\(/im
 
-      q.gsub!(%r{/\*[^!].*?\*/}m, "")                     # Strip multi-line comments
-      q.gsub!(%r{(?:--|#)[^'"\r\n]*(?=[\r\n]|\Z)}m, "")   # Strip single-line comments
-      return "use ?" if q =~ /\Ause \S+\Z/i
+      sql.gsub!(%r{/\*[^!].*?\*/}m, "")                     # Strip multi-line comments
+      sql.gsub!(%r{(?:--|#)[^'"\r\n]*(?=[\r\n]|\Z)}m, "")   # Strip single-line comments
+      return "use ?" if sql =~ /\Ause \S+\Z/i
 
       # Replace quoted strings with "?"
-      q.gsub!(/\\["']/, "")
-      q.gsub!(/".*?"/, "?")
-      q.gsub!(/'.*?'/, "?")
+      sql.gsub!(/\\["']/, "")
+      sql.gsub!(/".*?"/, "?")
+      sql.gsub!(/'.*?'/, "?")
 
-      q.downcase!
-      q.gsub!(/\bfalse\b|\btrue\b/, "?")      # Replace boolean values with "?"
-      q.gsub!(/[0-9+-][0-9a-f.xb+-]*/, "?")   # Replace numbers with "?"
-      q.gsub!(/[xb.+-]\?/, "?")               # Strip number prefixes
+      sql.downcase!
+      sql.gsub!(/\bfalse\b|\btrue\b/, "?")      # Replace boolean values with "?"
+      sql.gsub!(/[0-9+-][0-9a-f.xb+-]*/, "?")   # Replace numbers with "?"
+      sql.gsub!(/[xb.+-]\?/, "?")               # Strip number prefixes
 
-      q.gsub!(/\bnull\b/, "?")   # Replace NULLs with "?"
+      sql.gsub!(/\bnull\b/, "?")   # Replace NULLs with "?"
 
-      q.gsub!(/\b(in|values?)(?:[\s,]*\([\s?,]*\))+/, "\\1(?+)")                   # Collapse IN and VALUES lists
-      q.gsub!(/\b(select\s.*?)(?:(\sunion(?:\sall)?)\s\1)+/, "\\1 /*repeat$2*/")   # Collapse UNIONs
-      q.sub!(/\blimit \?(?:, ?\?| offset \?)?/, "limit ?")   # LIMITs and OFFSETs
-      q.gsub(/\border by (.+?)\s+asc/, "order by \\1")       # Remove extraneous ASCs from ORDER BYs
+      sql.gsub!(/\b(in|values?)(?:[\s,]*\([\s?,]*\))+/, "\\1(?+)")                   # Collapse IN and VALUES lists
+      sql.gsub!(/\b(select\s.*?)(?:(\sunion(?:\sall)?)\s\1)+/, "\\1 /*repeat$2*/")   # Collapse UNIONs
+      sql.sub!(/\blimit \?(?:, ?\?| offset \?)?/, "limit ?")   # LIMITs and OFFSETs
+      sql.gsub(/\border by (.+?)\s+asc/, "order by \\1")       # Remove extraneous ASCs from ORDER BYs
     end
 
     # Remove leading/trailing whitespace and compress all other runs of whitespace into a single space.
