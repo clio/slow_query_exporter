@@ -14,7 +14,7 @@ module SlowQueryExporter
     PATTERNS = {
       header:   /(^Tcp port:|^Time\s+Id|started with:$)/,
       skip:     /^(# Time: \d+|# Profile_|# No InnoDB statistics|use \w+;)/,
-      userhost: /^# User@Host: (\S+)\[\S+\] @\s*(\S+)\s*\[(\S*)\]/,
+      userhost: /^# User@Host: (\S+)\[\S+\] @\s*(\S*)\s*\[(\S*)\]/,
       schema:   /^# Schema: (\w*)\s+Last_errno: (\d+)\s+Killed: (\d+)/,
       qtime:    /^# Query_time: (\S+)\s+Lock_time: (\S+)\s+Rows_sent: (\d+)\s+Rows_examined: (\d+)\s+Rows_affected: (\d+)/,
       bytes:    /^# Bytes_sent: (\d+)\s+Tmp_tables: (\d+)\s+Tmp_disk_tables: (\d+)\s+Tmp_table_sizes: (\d+)/,
