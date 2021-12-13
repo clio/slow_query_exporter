@@ -1,3 +1,5 @@
+**NOTE:** This project is no longer in active use at Clio, since we have a different database cluster configuration and a different logging system now. It should remain publicly accessible, though, because it's linked from a [Clio Labs blog post](https://labs.clio.com/surfacing-bad-database-queries-to-developers-a694da00b822) about making slow queries visible to developers.
+
 # slow_query_exporter
 
 A daemon which monitors a MySQL slow query log and sends every entry it
